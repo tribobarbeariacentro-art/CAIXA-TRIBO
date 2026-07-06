@@ -251,7 +251,10 @@ const USERS = {
 };
 
 /* ---------- utils ---------- */
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+function todayISO(){
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
 function monthKeyOf(d){ return d.slice(0,7); }
 function monthLabel(key){ const [y,m] = key.split('-'); return MESES[parseInt(m,10)-1] + ' ' + y; }
 function fmtMoney(n){ return (n||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
@@ -499,8 +502,15 @@ function renderHoje(){
   const todays = data.entries.filter(e=>e.date===today).sort((a,b)=>0);
   const totE = todays.filter(e=>e.type==='entrada').reduce((s,e)=>s+e.amount,0);
   const totS = todays.filter(e=>e.type==='saida').reduce((s,e)=>s+e.amount,0);
+  const ateHoje = data.entries.filter(e=>e.date<=today);
+  const saldoTotal = data.openingBalance + ateHoje.reduce((s,e)=> s + (e.type==='entrada'?e.amount:-e.amount), 0);
 
   return `
+    <div class="card">
+      <h3>Saldo em caixa agora</h3>
+      <div class="n mono" style="font-size:28px; text-align:center; ${saldoTotal<0?'color:var(--saida);':''}">${fmtMoney(saldoTotal)}</div>
+      <p style="text-align:center; font-size:11px; color:var(--muted); margin-top:2px;">Saldo inicial do mês + tudo lançado até hoje</p>
+    </div>
     <div class="card">
       <h3>Hoje · ${fmtDateBR(today)}</h3>
       <div class="grid3">
