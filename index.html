@@ -239,6 +239,16 @@ const SAIDA_CATS = ['Salário/Comissão','Adiantamento','Fornecedor/Produtos','A
 const PAYABLE_CATS = ['Fornecedor','Salário','Despesa Fixa','Outros'];
 const PAYABLE_TO_SAIDA = {'Fornecedor':'Fornecedor/Produtos','Salário':'Salário/Comissão','Despesa Fixa':'Outros','Outros':'Outros'};
 
+// Login simples por usuário e senha. Isso NÃO é segurança forte: qualquer pessoa
+// que abrir o código-fonte do site (F12 > Fontes) consegue ler essas senhas.
+// Serve pra impedir que alguém abra o link por acaso e comece a editar o caixa,
+// não pra proteger contra alguém que sabe o que está fazendo.
+const USERS = {
+  'diego': { senha: 'diego123', nome: 'Diego' },
+  'bianca': { senha: 'bianca123', nome: 'Bianca' },
+  'johann': { senha: 'johann123', nome: 'Johann' }
+};
+
 /* ---------- utils ---------- */
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function monthKeyOf(d){ return d.slice(0,7); }
@@ -261,6 +271,7 @@ let state = {
   entryForm: { type:'entrada', date: todayISO(), category: ENTRADA_CATS[0], description:'', amount:'' },
   payableForm: { dueDate: todayISO(), category: PAYABLE_CATS[0], description:'', amount:'' },
   extrato: { start:'', end:'', result:null },
+  currentUser: null,
   loaded:false
 };
 
@@ -298,13 +309,46 @@ function monthTotals(key){
   return { rows, totalEntrada, totalSaida, saldoFinal: running, openingBalance: data.openingBalance };
 }
 
+/* ---------- login ---------- */
+function checkSavedLogin(){
+  const saved = localStorage.getItem('tribo-user');
+  if(saved && USERS[saved]) state.currentUser = saved;
+}
+function doLogin(username, senha){
+  const u = USERS[username];
+  if(!u || u.senha !== senha) return false;
+  state.currentUser = username;
+  localStorage.setItem('tribo-user', username);
+  return true;
+}
+function doLogout(){
+  state.currentUser = null;
+  localStorage.removeItem('tribo-user');
+  render();
+}
+function renderLogin(errorMsg){
+  return `
+  <div style="max-width:340px; margin:70px auto; padding:0 16px;">
+    <div class="card">
+      <h3 style="text-align:center; margin-bottom:16px;">Entrar</h3>
+      ${errorMsg ? `<p style="color:var(--saida); font-size:12.5px; text-align:center;">${errorMsg}</p>` : ''}
+      <label>Usuário</label>
+      <input type="text" id="login-user" autocomplete="username" placeholder="diego, bianca ou johann">
+      <label>Senha</label>
+      <input type="password" id="login-pass" autocomplete="current-password">
+      <button class="btn btn-primary" data-act="do-login" style="width:100%; margin-top:6px;">Entrar</button>
+    </div>
+  </div>`;
+}
+
 /* ---------- mutations ---------- */
 async function addEntry(form){
   const key = monthKeyOf(form.date);
   await loadMonth(key);
   state.monthCache[key].entries.push({
     id: genId(), date: form.date, type: form.type, category: form.category,
-    description: form.description || form.category, amount: parseFloat(form.amount)
+    description: form.description || form.category, amount: parseFloat(form.amount),
+    criadoPor: USERS[state.currentUser] ? USERS[state.currentUser].nome : state.currentUser
   });
   await saveMonth(key);
   if(key !== state.currentMonth){ /* keep currentMonth as is, just note it landed elsewhere */ }
@@ -328,7 +372,8 @@ async function addPayable(form){
   state.payablesCache[key].push({
     id: genId(), dueDate: form.dueDate, category: form.category,
     description: form.description || form.category, amount: parseFloat(form.amount),
-    status:'pendente', paidEntryId:null
+    status:'pendente', paidEntryId:null,
+    criadoPor: USERS[state.currentUser] ? USERS[state.currentUser].nome : state.currentUser
   });
   await savePayables(key);
   render();
@@ -373,8 +418,17 @@ async function togglePaid(key, id){
 
 /* ---------- render ---------- */
 function render(){
-  renderTabs();
+  const tabsEl = document.getElementById('tabs');
   const el = document.getElementById('content');
+
+  if(!state.currentUser){
+    tabsEl.innerHTML = '';
+    el.innerHTML = renderLogin(state.loginError);
+    attachEvents();
+    return;
+  }
+
+  renderTabs();
   if(state.activeTab==='hoje') el.innerHTML = renderHoje();
   else if(state.activeTab==='mes') { el.innerHTML = renderMes(); drawChart(); }
   else if(state.activeTab==='contas') el.innerHTML = renderContas();
@@ -386,7 +440,7 @@ function renderTabs(){
   const tabs = [['hoje','Hoje'],['mes','Livro do Mês'],['contas','Contas a Pagar'],['extrato','Extrato PDF']];
   document.getElementById('tabs').innerHTML = tabs.map(([k,l])=>
     `<button class="tab-btn ${state.activeTab===k?'active':''}" data-tab="${k}">${l}</button>`
-  ).join('');
+  ).join('') + `<button class="tab-btn" data-act="logout" style="flex:0 0 auto; color:var(--muted);" title="Sair">${USERS[state.currentUser].nome} · Sair</button>`;
 }
 
 function entryFormHTML(prefix){
@@ -443,7 +497,7 @@ function renderHoje(){
           <tr>
             <td class="${e.type==='entrada'?'val-entrada':'val-saida'}">${e.type==='entrada'?'Entrada':'Saída'}</td>
             <td>${e.category}</td>
-            <td>${e.description}</td>
+            <td>${e.description}${e.criadoPor?`<br><span style="color:var(--muted); font-size:11px;">por ${e.criadoPor}</span>`:''}</td>
             <td class="right mono">${fmtMoney(e.amount)}</td>
             <td class="center"><button class="small-del" data-act="del-entry" data-key="${key}" data-id="${e.id}">✕</button></td>
           </tr>`).join('')}
@@ -483,7 +537,7 @@ function renderMes(){
           <tr>
             <td>${fmtDateBR(e.date)}</td>
             <td class="${e.type==='entrada'?'val-entrada':'val-saida'}">${e.type==='entrada'?'Entrada':'Saída'}</td>
-            <td>${e.description}<br><span style="color:var(--muted); font-size:11px;">${e.category}</span></td>
+            <td>${e.description}<br><span style="color:var(--muted); font-size:11px;">${e.category}${e.criadoPor?' · '+e.criadoPor:''}</span></td>
             <td class="right mono ${e.type==='entrada'?'val-entrada':'val-saida'}">${e.type==='entrada'?'+':'-'}${fmtMoney(e.amount)}</td>
             <td class="right mono">${fmtMoney(e.saldo)}</td>
             <td class="center"><button class="small-del" data-act="del-entry" data-key="${key}" data-id="${e.id}">✕</button></td>
@@ -573,7 +627,7 @@ function renderContas(){
         ${list.map(p=>`
           <tr>
             <td>${fmtDateBR(p.dueDate)}</td>
-            <td>${p.description}<br><span style="color:var(--muted); font-size:11px;">${p.category}</span></td>
+            <td>${p.description}<br><span style="color:var(--muted); font-size:11px;">${p.category}${p.criadoPor?' · '+p.criadoPor:''}</span></td>
             <td class="right mono">${fmtMoney(p.amount)}</td>
             <td class="center">
               <span class="badge ${p.status==='pago'?'badge-pago':'badge-pendente'}" style="cursor:pointer;" data-act="toggle-paid" data-key="${key}" data-id="${p.id}">
@@ -638,6 +692,8 @@ function renderExtrato(){
 /* ---------- events ---------- */
 function attachEvents(){
   document.getElementById('tabs').onclick = (e)=>{
+    const logoutBtn = e.target.closest('[data-act="logout"]');
+    if(logoutBtn){ doLogout(); return; }
     const b = e.target.closest('[data-tab]');
     if(!b) return;
     state.activeTab = b.dataset.tab;
@@ -650,6 +706,18 @@ function attachEvents(){
     if(!b) return;
     const act = b.dataset.act;
 
+    if(act==='do-login'){
+      const user = document.getElementById('login-user').value.trim().toLowerCase();
+      const pass = document.getElementById('login-pass').value;
+      if(doLogin(user, pass)){
+        state.loginError = null;
+        await boot();
+      } else {
+        state.loginError = 'Usuário ou senha incorretos.';
+        render();
+      }
+      return;
+    }
     if(act==='set-type'){
       state.entryForm.type = b.dataset.val;
       state.entryForm.category = (b.dataset.val==='entrada'?ENTRADA_CATS:SAIDA_CATS)[0];
@@ -702,6 +770,11 @@ function attachEvents(){
     else if(act==='print-statement'){ window.print(); }
   };
 
+  const loginPass = document.getElementById('login-pass');
+  if(loginPass){
+    loginPass.onkeydown = (e)=>{ if(e.key==='Enter') c.querySelector('[data-act="do-login"]').click(); };
+  }
+
   const ob = document.getElementById('opening-balance');
   if(ob){ ob.onchange = async ()=>{ await updateOpeningBalance(state.currentMonth, ob.value); }; }
 
@@ -718,11 +791,14 @@ function attachEvents(){
 
 /* ---------- boot ---------- */
 async function boot(){
+  checkSavedLogin();
+  if(!state.currentUser){
+    render();
+    return;
+  }
   document.getElementById('content').innerHTML = '<div class="empty">Conectando...</div>';
-  try{
-    await initFirebase();
-  }catch(e){
-    return; // tela de configuração já foi exibida dentro de initFirebase
+  if(!db){
+    try{ await initFirebase(); } catch(e){ return; }
   }
   await loadMonth(state.currentMonth);
   await loadPayables(state.currentMonth);
