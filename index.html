@@ -474,17 +474,24 @@ async function togglePaid(key, id){
     const paymentDate = todayISO();
     const entryKey = monthKeyOf(paymentDate);
     await loadMonth(entryKey);
+    const valorAPagar = restanteAPagar(p, key);
+    if(valorAPagar <= 0){
+      alert('O adiantamento já dado cobre ou passa do valor dessa conta. Nada a lançar como saída. Marcando como paga mesmo assim.');
+    }
     const entryId = genId();
-    state.monthCache[entryKey].entries.push({
-      id: entryId, date: paymentDate, type:'saida',
-      category: PAYABLE_TO_SAIDA[p.category] || 'Outros',
-      description: 'Pagamento: ' + p.description, amount: p.amount,
-      funcionario: p.funcionario || null
-    });
+    if(valorAPagar > 0){
+      state.monthCache[entryKey].entries.push({
+        id: entryId, date: paymentDate, type:'saida',
+        category: PAYABLE_TO_SAIDA[p.category] || 'Outros',
+        description: 'Pagamento: ' + p.description + (valorAPagar !== p.amount ? ' (já descontado adiantamento)' : ''),
+        amount: valorAPagar,
+        funcionario: p.funcionario || null
+      });
+      await saveMonth(entryKey);
+    }
     p.status = 'pago';
-    p.paidEntryId = entryId;
-    p.paidEntryMonth = entryKey;
-    await saveMonth(entryKey);
+    p.paidEntryId = valorAPagar > 0 ? entryId : null;
+    p.paidEntryMonth = valorAPagar > 0 ? entryKey : null;
   } else {
     const entryKey = p.paidEntryMonth || key;
     if(p.paidEntryId){
@@ -732,11 +739,19 @@ function payableFormHTML(){
   </div>`;
 }
 
+function restanteAPagar(p, key){
+  if(p.category==='Salário' && p.funcionario){
+    const adiantado = sumAdiantamentos(key, p.funcionario);
+    return Math.max(0, p.amount - adiantado);
+  }
+  return p.amount;
+}
+
 function renderContas(){
   const key = state.currentMonth;
   loadPayables(key);
   const list = (state.payablesCache[key]||[]).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
-  const totalPendente = list.filter(p=>p.status==='pendente').reduce((s,p)=>s+p.amount,0);
+  const totalPendente = list.filter(p=>p.status==='pendente').reduce((s,p)=>s+restanteAPagar(p,key),0);
   const totalPago = list.filter(p=>p.status==='pago').reduce((s,p)=>s+p.amount,0);
   const adiantamentosPorFunc = FUNCIONARIOS
     .map(n=>({nome:n, valor: sumAdiantamentos(key, n)}))
@@ -760,7 +775,7 @@ function renderContas(){
         <div style="display:flex; justify-content:space-between; padding:4px 0; font-size:13px;">
           <span>${x.nome}</span><span class="mono" style="color:var(--amber);">${fmtMoney(x.valor)}</span>
         </div>`).join('')}
-      <p style="font-size:11px; color:var(--muted); margin-top:8px;">Esse valor já saiu do caixa. Ao lançar o salário de cada um, desconte isto do valor cheio.</p>
+      <p style="font-size:11px; color:var(--muted); margin-top:8px;">Isso já está descontado automaticamente do valor pendente de cada conta de salário abaixo.</p>
     </div>` : ''}
     ${payableFormHTML()}
     <div class="card">
@@ -768,18 +783,23 @@ function renderContas(){
       ${list.length===0 ? '<div class="empty">Nenhuma conta cadastrada neste mês.</div>' : `
       <table>
         <tr><th>Venc.</th><th>Descrição</th><th class="right">Valor</th><th class="center">Status</th><th></th></tr>
-        ${list.map(p=>`
+        ${list.map(p=>{
+          const restante = restanteAPagar(p,key);
+          const temDesconto = p.status==='pendente' && restante !== p.amount;
+          return `
           <tr>
             <td>${fmtDateBR(p.dueDate)}</td>
             <td>${p.description}<br><span style="color:var(--muted); font-size:11px;">${p.category}${p.criadoPor?' · '+p.criadoPor:''}</span></td>
-            <td class="right mono">${fmtMoney(p.amount)}</td>
+            <td class="right mono">
+              ${temDesconto ? `<span style="text-decoration:line-through; color:var(--muted); font-size:11px;">${fmtMoney(p.amount)}</span><br><span style="color:var(--amber);">${fmtMoney(restante)}</span>` : fmtMoney(p.amount)}
+            </td>
             <td class="center">
               <span class="badge ${p.status==='pago'?'badge-pago':'badge-pendente'}" style="cursor:pointer;" data-act="toggle-paid" data-key="${key}" data-id="${p.id}">
                 ${p.status==='pago'?'Pago':'Pendente'}
               </span>
             </td>
             <td class="center"><button class="small-del" data-act="edit-payable" data-key="${key}" data-id="${p.id}" title="Editar">✎</button><button class="small-del" data-act="del-payable" data-key="${key}" data-id="${p.id}">✕</button></td>
-          </tr>`).join('')}
+          </tr>`;}).join('')}
       </table>`}
     </div>
   `;
